@@ -1,0 +1,6 @@
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+google-genai==2.24.0
+pydantic-settings==2.15.0
+duckduckgo-search==8.1.1
+httpx==0.28.1
