@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS — Voice AI Web Search Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header><div><p class="eyebrow">MULTILINGUAL VOICE INTELLIGENCE</p><h1>JARVIS<span>.</span></h1></div><div id="status" class="status">OFFLINE</div></header>
+    <section class="hero">
+      <div class="orb" id="orb"><i></i><i></i><i></i></div>
+      <h2 id="state">Ready when you are.</h2><p>Talk naturally. JARVIS will search only when fresh information is needed.</p>
+      <div class="controls"><button id="start" class="primary">Start JARVIS</button><button id="mic" class="mic" disabled aria-label="Hold to talk">●</button><button id="stop" class="secondary" disabled>Stop</button></div>
+      <label class="language">Response language <select id="language"><option value="auto">Auto detect</option><option value="English">English</option><option value="Urdu">Urdu</option><option value="Roman Urdu">Roman Urdu</option></select></label>
+    </section>
+    <section class="conversation"><div class="input-row"><input id="text" autocomplete="off" placeholder="Ask JARVIS anything…"><button id="send" disabled>Send</button></div><div id="messages" aria-live="polite"></div></section>
+    <section id="sources" class="sources" hidden><h3>Web sources</h3><div id="source-list"></div></section>
+    <footer>Typed chat uses Gemini, then a local Ollama backup if Gemini is unavailable. Microphone conversations use Gemini Live and need an active Gemini connection.</footer>
+  </main><script src="/static/app.js?v=20260929-local-fallback2"></script>
+</body></html>
