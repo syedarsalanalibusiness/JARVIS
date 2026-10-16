@@ -1,0 +1,12 @@
+.env
+.venv/
+.deps/
+__pycache__/
+*.py[cod]
+data/*.db
+outputs/
+user_files/
+work/
+.DS_Store
+.idea/
+.vscode/
