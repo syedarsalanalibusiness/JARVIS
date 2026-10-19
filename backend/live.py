@@ -34,7 +34,10 @@ def friendly_live_error(exc: Exception) -> str:
     if "401" in lowered or "403" in lowered or "api key" in lowered:
         return "Gemini rejected the configured API key. Replace GEMINI_API_KEY in .env and restart JARVIS."
     if "404" in lowered or "not found" in lowered:
-        return "Gemini could not find the configured Live model. Set GEMINI_LIVE_MODEL to gemini-2.5-flash-native-audio-preview-12-2025 or another Live API model in .env, then restart JARVIS."
+        return (
+            f"Gemini could not find the configured Live model ({getattr(exc, 'model', 'check GEMINI_LIVE_MODEL')}). "
+            "Verify the model ID and that it is enabled for this API key."
+        )
     return message
 
 
@@ -46,6 +49,7 @@ class GeminiLiveBridge:
         self.session = None
         self.receiver: asyncio.Task | None = None
         self.answer_parts: list[str] = []
+        self.pending_turn_complete = False
 
     async def connect(self, language: str = "auto") -> None:
         if not self.settings.gemini_api_key:
@@ -58,7 +62,9 @@ class GeminiLiveBridge:
         }.get(language, "Detect the user's language and answer in that language.")
         config = {
             "response_modalities": ["AUDIO"],
-            "input_audio_transcription": {}, "output_audio_transcription": {},
+            "input_audio_transcription": {},
+            "output_audio_transcription": {},
+            "thinking_config": {"thinking_level": "medium"},
             "tools": [{"google_search": {}}],
             "system_instruction": f"You are JARVIS, a fast, warm multilingual voice AI assistant. {language_instruction} Support English, Urdu, and Roman Urdu. Be concise unless asked for depth. Use supplied web results as the current-information evidence and do not invent citations. Say when information is uncertain. The user can interrupt you at any time.",
         }
@@ -80,10 +86,12 @@ class GeminiLiveBridge:
     async def send_text(self, text: str) -> None:
         if self.session:
             self.answer_parts.clear()
+            self.pending_turn_complete = False
             await self.session.send_realtime_input(text=text)
 
     async def interrupt(self) -> None:
         self.answer_parts.clear()
+        self.pending_turn_complete = False
         if self.session:
             await self.session.send_realtime_input(audio_stream_end=True)
         await self.send_event({"type": "interrupted"})
@@ -92,27 +100,46 @@ class GeminiLiveBridge:
         try:
             async for response in self.session.receive():
                 content = getattr(response, "server_content", None)
-                if not content:
-                    continue
-                if getattr(content, "interrupted", False):
-                    self.answer_parts.clear()
-                    await self.send_event({"type": "interrupted"})
-                    continue
-                transcription = getattr(content, "input_transcription", None)
-                if transcription and transcription.text:
-                    await self.send_event({"type": "transcript", "text": transcription.text, "final": True})
-                output = getattr(content, "output_transcription", None)
-                if output and output.text:
-                    self.answer_parts.append(output.text)
-                    await self.send_event({"type": "response", "text": output.text})
-                turn = getattr(content, "model_turn", None)
-                if turn:
-                    for part in turn.parts:
-                        data = getattr(part, "inline_data", None)
-                        if data and data.data:
-                            await self.send_event({"type": "audio", "data": base64.b64encode(data.data).decode(), "mime_type": data.mime_type or "audio/pcm;rate=24000"})
-                if getattr(content, "turn_complete", False):
+                raw_status = getattr(response, "interaction_status", None)
+                if raw_status is None and content is not None:
+                    raw_status = getattr(content, "interaction_status", None)
+                status = getattr(raw_status, "value", raw_status)
+                status = str(status).rsplit(".", 1)[-1].upper() if status is not None else None
+                if status in {"IN_PROGRESS", "IDLE"}:
+                    await self.send_event({"type": "interaction_status", "status": status})
+
+                if content is not None:
+                    if getattr(content, "interrupted", False):
+                        self.answer_parts.clear()
+                        self.pending_turn_complete = False
+                        await self.send_event({"type": "interrupted"})
+                        continue
+                    transcription = getattr(content, "input_transcription", None)
+                    if transcription and transcription.text:
+                        await self.send_event({"type": "transcript", "text": transcription.text, "final": True})
+                    output = getattr(content, "output_transcription", None)
+                    if output and output.text:
+                        self.answer_parts.append(output.text)
+                        await self.send_event({"type": "response", "text": output.text})
+                    turn = getattr(content, "model_turn", None)
+                    if turn:
+                        for part in turn.parts:
+                            data = getattr(part, "inline_data", None)
+                            if data and data.data:
+                                await self.send_event({
+                                    "type": "audio",
+                                    "data": base64.b64encode(data.data).decode(),
+                                    "mime_type": data.mime_type or "audio/pcm;rate=24000",
+                                })
+                    if getattr(content, "turn_complete", False):
+                        self.pending_turn_complete = True
+                        if status is None:
+                            await self.send_event({"type": "turn_complete", "text": "".join(self.answer_parts)})
+                            self.pending_turn_complete = False
+
+                if self.pending_turn_complete and status == "IDLE":
                     await self.send_event({"type": "turn_complete", "text": "".join(self.answer_parts)})
+                    self.pending_turn_complete = False
         except Exception as exc:
             await self.send_event({"type": "voice_unavailable", "message": friendly_live_error(exc)})
 
