@@ -34,10 +34,7 @@ def friendly_live_error(exc: Exception) -> str:
     if "401" in lowered or "403" in lowered or "api key" in lowered:
         return "Gemini rejected the configured API key. Replace GEMINI_API_KEY in .env and restart JARVIS."
     if "404" in lowered or "not found" in lowered:
-        return (
-            f"Gemini could not find the configured Live model ({getattr(exc, 'model', 'check GEMINI_LIVE_MODEL')}). "
-            "Verify the model ID and that it is enabled for this API key."
-        )
+        return "Gemini could not find the configured Live model. Check GEMINI_LIVE_MODEL and API access."
     return message
 
 
