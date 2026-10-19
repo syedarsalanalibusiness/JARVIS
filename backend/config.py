@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """Configuration is loaded from the project .env file, never from source code."""
 
     gemini_api_key: str = ""
-    gemini_live_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    gemini_live_model: str = "gemini-3.8-live-extended-thinking"
     gemini_text_model: str = "gemini-3.5-flash-lite"
     ollama_enabled: bool = True
     ollama_base_url: str = "http://127.0.0.1:11434"
