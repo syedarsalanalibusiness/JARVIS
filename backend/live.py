@@ -61,7 +61,6 @@ class GeminiLiveBridge:
             "response_modalities": ["AUDIO"],
             "input_audio_transcription": {},
             "output_audio_transcription": {},
-            "thinking_config": {"thinking_level": "medium"},
             "tools": [{"google_search": {}}],
             "system_instruction": f"You are JARVIS, a fast, warm multilingual voice AI assistant. {language_instruction} Support English, Urdu, and Roman Urdu. Be concise unless asked for depth. Use supplied web results as the current-information evidence and do not invent citations. Say when information is uncertain. The user can interrupt you at any time.",
         }
