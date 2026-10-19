@@ -107,6 +107,10 @@ function finishTextRequest() { clearTimeout(textRequestTimer); textRequestPendin
 function handle(event) {
   if (event.type === "ready") { activeMode=event.mode||"voice"; setStatus(activeMode === "text" ? "TEXT MODE" : "ONLINE", true); state.textContent=activeMode === "text" ? "Text chat is ready. Voice is unavailable right now." : "JARVIS is listening."; start.disabled=true; stop.disabled=false; mic.disabled=!event.voice_available&&!SpeechRecognition; send.disabled=false; if(activeMode === "text") addMessage("assistant", `${event.message ? `${event.message} ` : "Gemini Live voice is unavailable right now. "}Typed chat is ready on the lightweight text model.${SpeechRecognition ? " Browser speech input is also available." : " Use typing for now; this browser does not support speech recognition."}`); }
   if (event.type === "status") setStatus("LISTENING", true);
+  if (event.type === "interaction_status") {
+    if (event.status === "IN_PROGRESS") state.textContent = "JARVIS is thinking through your request…";
+    if (event.status === "IDLE") state.textContent = "JARVIS is listening.";
+  }
   if (event.type === "fallback_started") { setStatus("LOCAL BACKUP", true); state.textContent=event.message; }
   if (event.type === "error") { clearTimeout(voiceTurnTimer); finishTextRequest(); addMessage("assistant", event.message); setStatus("ERROR"); socket?.close(); }
   if (event.type === "chat_error") { clearTimeout(voiceTurnTimer); finishTextRequest(); addMessage("assistant", event.message); setStatus(activeMode === "text" ? "TEXT MODE" : "ONLINE", true); }
