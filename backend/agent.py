@@ -80,10 +80,7 @@ class JarvisAgent:
         if self.settings.gemini_api_key:
             client = genai.Client(
                 api_key=self.settings.gemini_api_key,
-                http_options=types.HttpOptions(
-                    timeout=18_000,
-                    retry_options=types.HttpRetryOptions(attempts=1),
-                ),
+                http_options=types.HttpOptions(timeout=18_000),
             )
             try:
                 response = await asyncio.wait_for(
