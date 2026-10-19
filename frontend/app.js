@@ -3,6 +3,8 @@ const start = $("start"), stop = $("stop"), mic = $("mic"), send = $("send"), te
 const status = $("status"), state = $("state"), orb = $("orb"), messages = $("messages");
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let socket, stream, inputContext, processor, recognition, voiceTurnTimer, textRequestTimer, textRequestPending = false, browserVoice = false, isRecording = false, outputContext, nextAudioTime = 0, activeSources = [], receivedAudioThisTurn = false, activeMode = "voice";
+let httpTextFallback = false, userStopped = false, connectionErrorShown = false;
+const textSessionId = crypto.randomUUID();
 
 function setStatus(value, live = false) { status.textContent = value; status.classList.toggle("on", live); state.textContent = live ? (activeMode === "text" ? "Text chat is ready." : "JARVIS is listening.") : "Ready when you are."; orb.classList.toggle("live", live); }
 function addMessage(role, value) { const node = document.createElement("article"); node.className = `message ${role}`; node.innerHTML = `<b>${role === "user" ? "YOU" : "JARVIS"}</b>`; if (value) node.append(document.createTextNode(value)); messages.append(node); node.scrollIntoView({behavior:"smooth", block:"end"}); return node; }
@@ -10,16 +12,98 @@ function wsUrl() { return `${location.protocol === "https:" ? "wss" : "ws"}://${
 function bytesToBase64(bytes) { let binary = ""; const slice = 0x8000; for (let i=0;i<bytes.length;i+=slice) binary += String.fromCharCode(...bytes.subarray(i,i+slice)); return btoa(binary); }
 function base64ToBytes(b64) { const binary = atob(b64), out = new Uint8Array(binary.length); for(let i=0;i<binary.length;i++) out[i]=binary.charCodeAt(i); return out; }
 
-async function connect() {
-  if (socket?.readyState === WebSocket.OPEN) return;
-  socket = new WebSocket(wsUrl());
-  socket.onopen = () => socket.send(JSON.stringify({type:"start", language:$("language").value}));
-  socket.onmessage = async ({data}) => handle(JSON.parse(data));
-  socket.onclose = () => { clearTimeout(voiceTurnTimer); setStatus("OFFLINE"); start.disabled=false; stop.disabled=true; mic.disabled=true; send.disabled=true; };
-  socket.onerror = () => addMessage("assistant", "Connection error. Confirm the JARVIS server is running.");
+function enableHttpTextMode() {
+  activeMode = "text"; httpTextFallback = true;
+  setStatus("TEXT MODE", true);
+  state.textContent = "Live connection nahi bani. Aap text mein sawaal bhej sakte hain.";
+  start.disabled = false; stop.disabled = true; mic.disabled = !SpeechRecognition; send.disabled = false;
 }
 
-function finishTextRequest() { clearTimeout(textRequestTimer); textRequestPending = false; send.disabled = socket?.readyState !== WebSocket.OPEN; }
+async function sendTextQuestion(value) {
+  if (!value) return;
+  if (textRequestPending) { addMessage("assistant", "Pichhla sawaal abhi process ho raha hai; jawab aane dein."); return; }
+  if (value.length > 4000) { addMessage("assistant", "Sawaal 4,000 characters se chhota rakhein."); return; }
+
+  clearTimeout(voiceTurnTimer);
+  receivedAudioThisTurn = false;
+  addMessage("user", value);
+  text.value = "";
+  textRequestPending = true;
+  send.disabled = true;
+  state.textContent = "JARVIS jawab tayyar kar raha hai…";
+
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({type:"text", text:value, language:$("language").value}));
+    textRequestTimer = setTimeout(() => {
+      if (!textRequestPending) return;
+      textRequestPending = false; send.disabled = false;
+      state.textContent = "Jawab abhi nahi aaya. Dobara koshish kar sakte hain.";
+      addMessage("assistant", "JARVIS se 80 seconds mein jawab nahi aaya. API key, quota, ya cloud logs check karein.");
+    }, 80000);
+    return;
+  }
+
+  httpTextFallback = true;
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({text:value, language:$("language").value, session_id:textSessionId})
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.detail || `Request failed (${response.status})`);
+    addMessage("assistant", result.text || "JARVIS ne khaali jawab bheja.");
+    if (Array.isArray(result.sources)) showSources(result.sources);
+    speakFallback(result.text);
+  } catch (error) {
+    addMessage("assistant", `Chat request failed: ${error.message}`);
+  } finally {
+    clearTimeout(textRequestTimer);
+    textRequestPending = false;
+    send.disabled = false;
+    setStatus("TEXT MODE", true);
+  }
+}
+
+async function connect() {
+  if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+  httpTextFallback = false; userStopped = false; connectionErrorShown = false; activeMode = "voice";
+  setStatus("CONNECTING"); start.disabled = true; stop.disabled = true; mic.disabled = true; send.disabled = true;
+  try {
+    const current = new WebSocket(wsUrl()); socket = current;
+    current.onopen = () => { if (socket === current) current.send(JSON.stringify({type:"start", language:$("language").value})); };
+    current.onmessage = ({data}) => {
+      try { handle(JSON.parse(data)); }
+      catch { if (!connectionErrorShown) { connectionErrorShown = true; addMessage("assistant", "JARVIS ka server response samajh nahi aaya."); } }
+    };
+    current.onerror = () => {
+      if (socket !== current || userStopped) return;
+      if (!connectionErrorShown) {
+        connectionErrorShown = true;
+        addMessage("assistant", "Live connection nahi bani; text chat ke liye cloud HTTP connection try kar raha hoon.");
+      }
+      enableHttpTextMode();
+    };
+    current.onclose = () => {
+      if (socket !== current) return;
+      clearTimeout(voiceTurnTimer);
+      if (userStopped) {
+        setStatus("OFFLINE"); start.disabled = false; stop.disabled = true; mic.disabled = true; send.disabled = true;
+        return;
+      }
+      if (!httpTextFallback && !connectionErrorShown) {
+        connectionErrorShown = true;
+        addMessage("assistant", "Live connection band ho gayi; text chat ab cloud HTTP se chalegi.");
+      }
+      enableHttpTextMode();
+    };
+  } catch (error) {
+    addMessage("assistant", `Live connection nahi bani: ${error.message}`);
+    enableHttpTextMode();
+  }
+}
+
+function finishTextRequest() { clearTimeout(textRequestTimer); textRequestPending = false; send.disabled = httpTextFallback || socket?.readyState === WebSocket.OPEN ? false : true; }
 function handle(event) {
   if (event.type === "ready") { activeMode=event.mode||"voice"; setStatus(activeMode === "text" ? "TEXT MODE" : "ONLINE", true); state.textContent=activeMode === "text" ? "Text chat is ready. Voice is unavailable right now." : "JARVIS is listening."; start.disabled=true; stop.disabled=false; mic.disabled=!event.voice_available&&!SpeechRecognition; send.disabled=false; if(activeMode === "text") addMessage("assistant", `${event.message ? `${event.message} ` : "Gemini Live voice is unavailable right now. "}Typed chat is ready on the lightweight text model.${SpeechRecognition ? " Browser speech input is also available." : " Use typing for now; this browser does not support speech recognition."}`); }
   if (event.type === "status") setStatus("LISTENING", true);
@@ -50,9 +134,7 @@ async function startRecording() {
     recognition.onresult = (event) => {
       const transcript = Array.from(event.results).map(result => result[0].transcript).join(" ").trim();
       if (!transcript) return;
-      heardSpeech=true; addMessage("user", transcript); receivedAudioThisTurn=false;
-      socket.send(JSON.stringify({type:"text",text:transcript,language:$("language").value}));
-      state.textContent="JARVIS is thinking…";
+      heardSpeech=true; sendTextQuestion(transcript);
     };
     recognition.onerror = (event) => { const detail=event.error==="network"?"The browser speech-to-text service could not connect to its network service. This is separate from microphone permission.":`Browser speech input failed (${event.error}).`; addMessage("assistant", `${detail} You can still type your question.`); };
     recognition.onend = () => { isRecording=false; browserVoice=false; mic.classList.remove("live"); if(!heardSpeech) state.textContent="No speech received. Hold the mic and try again, or type your question."; };
@@ -70,6 +152,6 @@ function playPcm(data) { outputContext ||= new AudioContext({sampleRate:24000});
 function stopPlayback(){activeSources.forEach(s=>{try{s.stop()}catch{}});activeSources=[];nextAudioTime=0;}
 function speakFallback(value) { if (!value || !("speechSynthesis" in window)) return; speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(value); utterance.lang = $("language").value === "Urdu" ? "ur-PK" : "en-US"; speechSynthesis.speak(utterance); }
 
-start.onclick=connect; stop.onclick=()=>{ stopRecording(); stopPlayback(); socket?.send(JSON.stringify({type:"stop"})); socket?.close(); };
+start.onclick=connect; stop.onclick=()=>{ userStopped=true; httpTextFallback=false; stopRecording(); stopPlayback(); socket?.send(JSON.stringify({type:"stop"})); socket?.close(); };
 mic.onpointerdown=()=>startRecording().catch(e=>addMessage("assistant",`Microphone unavailable: ${e.message}`)); mic.onpointerup=stopRecording; mic.onpointerleave=stopRecording;
-send.onclick=()=>{const value=text.value.trim();if(!value)return;if(textRequestPending){addMessage("assistant","Your last question is still waiting. Please wait for its reply before sending another.");return;} if(socket?.readyState!==WebSocket.OPEN){addMessage("assistant","Start JARVIS first, then ask your question.");return;} clearTimeout(voiceTurnTimer);receivedAudioThisTurn=false;textRequestPending=true;send.disabled=true;addMessage("user",value);socket.send(JSON.stringify({type:"text",text:value,language:$("language").value}));text.value="";state.textContent="JARVIS is thinking…";textRequestTimer=setTimeout(()=>{textRequestPending=false;send.disabled=socket?.readyState!==WebSocket.OPEN;state.textContent="No response yet.";addMessage("assistant","No reply arrived within 80 seconds. If the local model is running, check whether it finished loading; otherwise check the Gemini quota/network. You can safely try again now.");},80000);}; text.onkeydown=e=>{if(e.key==="Enter")send.click();};
+send.onclick=()=>{const value=text.value.trim();if(value)sendTextQuestion(value);}; text.onkeydown=e=>{if(e.key==="Enter")send.click();};
