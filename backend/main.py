@@ -30,7 +30,9 @@ def _ignore_unavailable_loopback_proxy() -> None:
 
 _ignore_unavailable_loopback_proxy()
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket
+from pydantic import BaseModel, Field
+from uuid import uuid4
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,6 +58,26 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="JARVIS — Fast Multilingual Voice AI Web Search Agent", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
+
+
+class TextChatRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    language: str = Field(default="auto", max_length=30)
+    session_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=64)
+
+
+@app.post("/api/chat")
+async def text_chat(request: TextChatRequest):
+    question = request.text.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Please enter a question for JARVIS.")
+    prompt, sources = await agent.enrich(request.session_id, question)
+    try:
+        answer = await agent.answer_text(prompt, request.language)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    agent.save_answer(request.session_id, answer)
+    return {"text": answer, "sources": sources}
 
 
 @app.get("/", include_in_schema=False)
