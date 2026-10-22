@@ -1,5 +1,6 @@
 import html
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from xml.etree import ElementTree
 
@@ -7,15 +8,20 @@ import httpx
 
 
 def search_web(query: str, max_results: int = 5) -> list[dict[str, str]]:
-    """Fetch current news from Google's public RSS search feed (no API key required)."""
-    lower = query.lower()
+    """Fetch recent news from Google's public RSS search feed (no API key required)."""
     if re.search(r"[\u0600-\u06ff]", query):
         language, country, edition = "ur-PK", "PK", "PK:ur"
     elif re.search(r"[\u0900-\u097f]", query):
         language, country, edition = "hi-IN", "IN", "IN:hi"
     else:
         language, country, edition = "en-US", "US", "US:en"
-    params = {"q": query, "hl": language, "gl": country, "ceid": edition}
+    recent_after = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    params = {
+        "q": f"{query} after:{recent_after}",
+        "hl": language,
+        "gl": country,
+        "ceid": edition,
+    }
     url = "https://news.google.com/rss/search?" + urlencode(params)
     try:
         response = httpx.get(
