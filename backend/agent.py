@@ -4,8 +4,6 @@ import logging
 from collections.abc import Awaitable, Callable
 
 import httpx
-from google import genai
-from google.genai import types
 
 from backend.config import Settings
 from backend.memory import MemoryStore
@@ -65,7 +63,9 @@ class JarvisAgent:
         language: str = "auto",
         on_local_fallback: Callable[[], Awaitable[None]] | None = None,
     ) -> str:
-        """Try Gemini first, then a local Ollama model without API quotas."""
+        """Use only Groq's free-tier text model; never call a billable provider."""
+        if not self.settings.groq_api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured in FastAPI Cloud secrets.")
         language_instruction = {
             "English": "Answer in English.",
             "Urdu": "جواب اردو میں دیں۔",
@@ -76,53 +76,29 @@ class JarvisAgent:
             f"{language_instruction} Be clear and concise, remember the provided conversation context, "
             "and say when you are uncertain. Never claim to have performed an action you did not perform."
         )
-        gemini_error: Exception | None = None
-        if self.settings.gemini_api_key:
-            client = genai.Client(
-                api_key=self.settings.gemini_api_key,
-                http_options=types.HttpOptions(timeout=10_000, retry_options=types.HttpRetryOptions(attempts=2, initial_delay=0.5, max_delay=1.0)),
-            )
-            try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.models.generate_content,
-                        model=self.settings.gemini_text_model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            max_output_tokens=320,
-                            temperature=0.5,
-                        ),
-                    ),
-                    timeout=20,
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=8.0)) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.settings.groq_api_key}"},
+                    json={
+                        "model": self.settings.groq_text_model,
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "max_completion_tokens": 480,
+                        "reasoning_effort": "low",
+                    },
                 )
-                text = (response.text or "").strip()
-                if text:
-                    return text
-                gemini_error = RuntimeError("Gemini returned an empty response.")
-            except asyncio.TimeoutError as exc:
-                gemini_error = RuntimeError("Gemini did not answer within 20 seconds.")
-                logger.warning("Gemini text response timed out for model %s", self.settings.gemini_text_model)
-            except Exception as exc:
-                gemini_error = exc
-                logger.warning("Gemini failed; trying local fallback model %s", self.settings.ollama_model)
-                logger.exception("Gemini text request failed for model %s", self.settings.gemini_text_model)
-        else:
-            gemini_error = RuntimeError("GEMINI_API_KEY is not configured.")
-
-        if self.settings.ollama_enabled:
-            try:
-                if on_local_fallback:
-                    await on_local_fallback()
-                return await self._answer_local(prompt, system_instruction)
-            except Exception as local_error:
-                logger.warning("Local fallback failed for model %s: %s", self.settings.ollama_model, local_error)
-                raise RuntimeError(
-                    "Gemini could not answer and the local fallback is not ready. "
-                    "Install Ollama, download qwen3:4b, and leave Ollama running; JARVIS will then answer "
-                    "locally when the cloud quota or connection fails. No paid billing is enabled automatically."
-                ) from (gemini_error or local_error)
-        raise RuntimeError(f"Gemini could not answer: {gemini_error}") from gemini_error
+                response.raise_for_status()
+            answer = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            if not answer:
+                raise RuntimeError("Groq returned an empty response.")
+            return answer
+        except Exception as exc:
+            logger.warning("Groq text request failed for model %s: %s", self.settings.groq_text_model, exc)
+            raise RuntimeError("Groq free-tier service is temporarily unavailable or its quota is exhausted. Please try again later.") from exc
 
     async def _answer_local(self, prompt: str, system_instruction: str) -> str:
         """Use the Ollama loopback API as a no-cloud-quota fallback."""

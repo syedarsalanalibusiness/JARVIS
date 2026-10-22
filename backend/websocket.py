@@ -28,13 +28,13 @@ async def jarvis_socket(websocket: WebSocket, agent: JarvisAgent) -> None:
             kind = message.get("type")
             if kind == "start":
                 language = message.get("language", "auto")
-                try:
-                    await bridge.connect(language)
-                    mode["live_available"] = True
-                except Exception as exc:
-                    start_message = friendly_live_error(exc)
+                if agent.settings.groq_api_key:
+                    # Use free, turn-based Groq transcription/chat. Do not call Gemini Live.
+                    mode["live_available"] = False
+                    start_message = "Free-tier Groq chat and Whisper voice input are ready. Hold the mic to ask a voice question."
                 else:
-                    start_message = ""
+                    mode["live_available"] = False
+                    start_message = "GROQ_API_KEY is missing from FastAPI Cloud secrets. You can still type, but chat and voice need the free Groq key."
                 await send({
                     "type": "ready",
                     "session_id": session_id,
@@ -49,7 +49,7 @@ async def jarvis_socket(websocket: WebSocket, agent: JarvisAgent) -> None:
                     except Exception as exc:
                         await send({"type": "voice_unavailable", "message": friendly_live_error(exc)})
                 else:
-                    await send({"type": "chat_error", "message": "Gemini Live voice quota is used up for now. Typed chat is still available; voice can resume when the Live quota resets."})
+                    await send({"type": "chat_error", "message": "Live streaming voice is disabled in free-only mode. Hold the mic to record a question for Groq Whisper, or type your question."})
             elif kind == "audio_end":
                 if mode["live_available"]:
                     try:
