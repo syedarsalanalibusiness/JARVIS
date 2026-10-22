@@ -10,7 +10,7 @@ from backend.memory import MemoryStore
 from backend.tools import calculate, search_web
 from backend.tools.weather import get_weather
 
-CURRENT_WORDS = ("latest", "current", "today", "news", "search", "google", "web", "recent", "developments", "live", "latest", "aaj", "khabar", "search karo", "google par")
+CURRENT_WORDS = ("latest", "current", "today", "news", "search", "google", "web", "recent", "developments", "live", "aaj", "khabar", "search karo", "google par", "आज", "आज की", "ताज़ा", "खबर", "समाचार", "अभी", "वर्तमान", "नवीनतम", "آج", "تازہ", "خبریں", "موجودہ", "حالیہ")
 logger = logging.getLogger(__name__)
 
 
